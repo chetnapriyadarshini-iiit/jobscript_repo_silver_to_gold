@@ -73,6 +73,39 @@ df_l1_bonus_high = df_silver.filter(F.col("bonus") >= 1500)
 
 df_l1_young = df_silver.filter(F.col("age") <= 25 )
 
+
+df_l2_detail = (
+    df_silver
+        .withColumn("total_compensation", F.col("salary") + F.col("bonus"))
+        .withColumn("department_clean", F.upper(F.trim(F.col("department"))))
+        .withColumn("state_clean",      F.upper(F.trim(F.col("state"))))
+        .withColumn("salary_bucket",
+            F.when(F.col("salary") < 50000, "LOW")
+             .when((F.col("salary") >= 50000) & (F.col("salary") < 100000), "MID")
+             .otherwise("HIGH")
+        )
+)
+
+df_kpi_avg_comp_by_dept = (
+    df_silver
+        .withColumn("total_compensation", F.col("salary") + F.col("bonus"))
+        .groupBy("department")
+        .agg(
+            F.round(F.avg("total_compensation"), 2).alias("avg_total_compensation"),
+            F.count("*").alias("employee_count")
+        )
+        .orderBy("department")
+)
+
+ df_kpi_hc_by_state_dept = (
+    df_silver
+        .groupBy("state", "department")
+        .agg(
+            F.countDistinct("employee_id").alias("headcount")
+        )
+        .orderBy("state", "department")
+)
+
 (df_l1_sal_high
          .repartition("state","department") #spark reshuffles here #co-locate rows per partition for better write pattern and startegy
          .write.mode("overwrite")
@@ -96,14 +129,46 @@ df_l1_young = df_silver.filter(F.col("age") <= 25 )
          .partitionBy("state","department") #spark sorts and put , so what ever update , it will go right place
          .parquet(GOLD_L1_YOUNG)
 )
+
+(df_l2_detail
+         .repartition("state","department") #spark reshuffles here #co-locate rows per partition for better write pattern and startegy
+         .write.mode("overwrite")
+         .option("compression","snappy")
+         .partitionBy("state","department") #spark sorts and put , so what ever update , it will go right place
+         .parquet(GOLD_L2_DETAIL)
+)
+
+(df_kpi_avg_comp_by_dept
+         .repartition("state","department") #spark reshuffles here #co-locate rows per partition for better write pattern and startegy
+         .write.mode("overwrite")
+         .option("compression","snappy")
+         .partitionBy("state","department") #spark sorts and put , so what ever update , it will go right place
+         .parquet(GOLD_KPI_AVG_COMP_BY_DEPT)
+)
+
+(df_kpi_hc_by_state_dept
+         .repartition("state","department") #spark reshuffles here #co-locate rows per partition for better write pattern and startegy
+         .write.mode("overwrite")
+         .option("compression","snappy")
+         .partitionBy("state","department") #spark sorts and put , so what ever update , it will go right place
+         .parquet(GOLD_KPI_HC_BY_STATE_DEPT)
+)
+
+
         
 # Convert Spark DFs → DynamicFrames (so sinks can update the Catalog)
 dyf_l1_sal_high   = DynamicFrame.fromDF(df_l1_sal_high,   glueContext, "dyf_l1_sal_high")
 dyf_l1_bonus_high = DynamicFrame.fromDF(df_l1_bonus_high, glueContext, "dyf_l1_bonus_high")
 dyf_l1_young      = DynamicFrame.fromDF(df_l1_young,      glueContext, "dyf_l1_young")
+dyf_l2_detail   = DynamicFrame.fromDF(df_l2_detail,   glueContext, "df_l2_detail")
+dyf_kpi_avg_comp_by_dept = DynamicFrame.fromDF(df_kpi_avg_comp_by_dept, glueContext, "df_kpi_avg_comp_by_dept")
+dyf_kpi_hc_by_state_dept      = DynamicFrame.fromDF(df_kpi_hc_by_state_dept,      glueContext, "df_kpi_hc_by_state_dept")
 
 sink_with_catalog(GOLD_L1_SAL_HIGH, "gold_l1_high_salary", ["state","department"], "sink_l1_sal").writeFrame(dyf_l1_sal_high)
 sink_with_catalog(GOLD_L1_BONUS_HIGH, "gold_l1_high_bonus",          ["state","department"], "sink_l1_bonus").writeFrame(dyf_l1_bonus_high)
 sink_with_catalog(GOLD_L1_YOUNG,      "gold_l1_early_career",        ["state","department"], "sink_l1_young").writeFrame(dyf_l1_young)
+sink_with_catalog(GOLD_L2_DETAIL, "gold_l2_detail_derived", ["state","department"], "sink_l2_detail").writeFrame(dyf_l2_detail)
+sink_with_catalog(GOLD_KPI_AVG_COMP_BY_DEPT, "gold_l2_kpi_avg_comp_by_dept",          ["state","department"], "sink_l2_kpi_avg_comp_by_dept").writeFrame(dyf_kpi_avg_comp_by_dept)
+sink_with_catalog(GOLD_KPI_HC_BY_STATE_DEPT,      "gold_l2_kpi_hc_by_state_dept",        ["state","department"], "sink_l2_kpi_hc_by_state_dept").writeFrame(dyf_kpi_hc_by_state_dept)
 
 job.commit()
